@@ -148,8 +148,12 @@ export { C, M };
 `;
 Deno.writeTextFileSync("dist/esm/src/core/core.js", coreFile);
 
-Deno.mkdirSync("dist/esm/src/core/libs/cardano_message_signing/nodejs");
-Deno.mkdirSync("dist/esm/src/core/libs/cardano_multiplatform_lib/nodejs");
+Deno.mkdirSync("dist/esm/src/core/libs/cardano_message_signing/nodejs", {
+  recursive: true,
+});
+Deno.mkdirSync("dist/esm/src/core/libs/cardano_multiplatform_lib/nodejs", {
+  recursive: true,
+});
 
 Deno.copyFileSync(
   "src/core/libs/cardano_message_signing/nodejs/cardano_message_signing.generated.js",
