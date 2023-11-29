@@ -1,8 +1,25 @@
 {
-  "name": "jucid-cardano",
-  "version": "1.0.0-alpha.1",
+  "name": "@jpg-store/lucid-cardano",
+  "version": "0.11.0",
   "license": "MIT",
-  "author": "Josh Marchand",
-  "description": "Jucid is a fork of Lucid which allows you to create Cardano transactions and off-chain code for your Plutus contracts in JavaScript, Deno and Node.js without introducing memory leaks.",
-  "repository": "https://github.com/yHSJ/jucid"
+  "description": "This is a fork of the original Lucid repo compiled into CommonJS. For more information check https://github.com/spacebudz/lucid",
+  "repository": "https://github.com/jpg-store/lucid",
+  "module": "./dist/esm/mod.js",
+  "main": "./dist/esm/mod.js",
+  "types": "./dist/types/mod.d.ts",
+  "engines": {
+    "node": ">=14"
+  },
+  "dependencies": {
+    "node-fetch": "^3.2.3",
+    "@peculiar/webcrypto": "^1.4.0",
+    "ws": "^8.10.0"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/mod.js",
+      "types": "./dist/types/mod.d.ts"
+    }
+  }
 }

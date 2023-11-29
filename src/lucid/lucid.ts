@@ -44,6 +44,12 @@ import { Emulator } from "../provider/emulator.ts";
 import { Freeable, Freeables } from "../utils/freeable.ts";
 import { getTransactionBuilderConfig } from "../utils/transaction_builder_config.ts";
 
+type LucidConstructorArgs = {
+  provider?: Provider;
+  network?: Network;
+  protocolParameters?: ProtocolParameters;
+};
+
 export class Lucid {
   protocolParameters?: ProtocolParameters;
   slotConfig!: SlotConfig;
@@ -52,11 +58,11 @@ export class Lucid {
   network: Network = "Mainnet";
   utils!: Utils;
 
-  static async new(
-    provider?: Provider,
-    network?: Network,
-    protocolParameters?: ProtocolParameters,
-  ): Promise<Lucid> {
+  static async new({
+    provider,
+    network,
+    protocolParameters,
+  }: LucidConstructorArgs): Promise<Lucid> {
     const lucid = new this();
     if (network) lucid.network = network;
     if (protocolParameters) {
@@ -64,7 +70,6 @@ export class Lucid {
     }
     if (provider) {
       lucid.provider = provider;
-
       if (lucid.provider instanceof Emulator) {
         lucid.network = "Custom";
         SLOT_CONFIG_NETWORK[lucid.network] = {
@@ -110,7 +115,7 @@ export class Lucid {
     if (this.network === "Custom") {
       throw new Error("Cannot switch when on custom network.");
     }
-    const lucid = await Lucid.new(provider, network);
+    const lucid = await Lucid.new({ provider, network });
     this.protocolParameters = lucid.protocolParameters;
     this.slotConfig = lucid.slotConfig;
     this.provider = provider || this.provider;
@@ -336,6 +341,9 @@ export class Lucid {
         }
         return null;
       },
+      getCollateralCore: (): C.TransactionUnspentOutputs | undefined => {
+        return undefined;
+      },
       getUtxos: async (): Promise<UTxO[]> => {
         const utxos = ((await api.getUtxos()) || []).map((utxo) => {
           const parsedUtxo = C.TransactionUnspentOutput.from_bytes(
@@ -415,17 +423,28 @@ export class Lucid {
 
         return Promise.resolve(rewardAddress ?? null);
       },
+      getCollateralCore: (): C.TransactionUnspentOutputs | undefined => {
+        if (!collateral || !collateral.length) {
+          return undefined;
+        }
+
+        const coreUtxos = C.TransactionUnspentOutputs.new();
+        collateral.forEach((utxo) => coreUtxos.add(utxoToCore(utxo)));
+        return coreUtxos;
+      },
       getUtxos: async (): Promise<UTxO[]> => {
         return utxos ? utxos : await this.utxosAt(paymentCredentialOf(address));
       },
       getUtxosCore: async (): Promise<C.TransactionUnspentOutputs> => {
         const coreUtxos = C.TransactionUnspentOutputs.new();
-        (utxos ? utxos : await this.utxosAt(paymentCredentialOf(address)))
-          .forEach((utxo) => {
-            const coreUtxo = utxoToCore(utxo);
-            coreUtxos.add(coreUtxo);
-            coreUtxo.free();
-          });
+        (utxos
+          ? utxos
+          : await this.utxosAt(paymentCredentialOf(address))
+        ).forEach((utxo) => {
+          const coreUtxo = utxoToCore(utxo);
+          coreUtxos.add(coreUtxo);
+          coreUtxo.free();
+        });
 
         return coreUtxos;
       },

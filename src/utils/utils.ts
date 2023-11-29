@@ -50,7 +50,7 @@ export class Utils {
 
   validatorToAddress(
     validator: SpendingValidator,
-    stakeCredential?: Credential
+    stakeCredential?: Credential,
   ): Address {
     const bucket: FreeableBucket = [];
     const networkId = networkToId(this.lucid.network);
@@ -76,7 +76,7 @@ export class Utils {
         const baseAddress = C.BaseAddress.new(
           networkId,
           paymentPart,
-          stakePart
+          stakePart,
         );
         bucket.push(baseAddress);
         const address = baseAddress.to_address();
@@ -92,7 +92,7 @@ export class Utils {
         bucket.push(paymentPart);
         const enterpriseAddress = C.EnterpriseAddress.new(
           networkId,
-          paymentPart
+          paymentPart,
         );
         bucket.push(enterpriseAddress);
         const address = enterpriseAddress.to_address();
@@ -107,7 +107,7 @@ export class Utils {
 
   credentialToAddress(
     paymentCredential: Credential,
-    stakeCredential?: Credential
+    stakeCredential?: Credential,
   ): Address {
     const networkId = networkToId(this.lucid.network);
     const bucket: FreeableBucket = [];
@@ -139,7 +139,7 @@ export class Utils {
         const baseAddress = C.BaseAddress.new(
           networkId,
           paymentPart,
-          stakePart
+          stakePart,
         );
         bucket.push(baseAddress);
         const address = baseAddress.to_address();
@@ -161,7 +161,7 @@ export class Utils {
 
         const enterpriseAddress = C.EnterpriseAddress.new(
           networkId,
-          paymentPart
+          paymentPart,
         );
         bucket.push(enterpriseAddress);
         const address = enterpriseAddress.to_address();
@@ -175,7 +175,7 @@ export class Utils {
   }
 
   validatorToRewardAddress(
-    validator: CertificateValidator | WithdrawalValidator
+    validator: CertificateValidator | WithdrawalValidator,
   ): RewardAddress {
     const bucket: FreeableBucket = [];
     const validatorHash = this.validatorToScriptHash(validator);
@@ -185,7 +185,7 @@ export class Utils {
     bucket.push(stakePart);
     const rewardAddress = C.RewardAddress.new(
       networkToId(this.lucid.network),
-      stakePart
+      stakePart,
     );
     bucket.push(rewardAddress);
     const address = rewardAddress.to_address();
@@ -212,7 +212,7 @@ export class Utils {
 
     const rewardAddress = C.RewardAddress.new(
       networkToId(this.lucid.network),
-      stakePart
+      stakePart,
     );
     bucket.push(rewardAddress);
     const address = rewardAddress.to_address();
@@ -229,7 +229,7 @@ export class Utils {
       switch (validator.type) {
         case "Native": {
           const nativeScript = C.NativeScript.from_bytes(
-            fromHex(validator.script)
+            fromHex(validator.script),
           );
           bucket.push(nativeScript);
           const hash = nativeScript.hash(C.ScriptHashNamespace.NativeScript);
@@ -238,7 +238,7 @@ export class Utils {
         }
         case "PlutusV1": {
           const plutusScript = C.PlutusScript.from_bytes(
-            fromHex(applyDoubleCborEncoding(validator.script))
+            fromHex(applyDoubleCborEncoding(validator.script)),
           );
           bucket.push(plutusScript);
           const hash = plutusScript.hash(C.ScriptHashNamespace.PlutusV1);
@@ -247,7 +247,7 @@ export class Utils {
         }
         case "PlutusV2": {
           const plutusScript = C.PlutusScript.from_bytes(
-            fromHex(applyDoubleCborEncoding(validator.script))
+            fromHex(applyDoubleCborEncoding(validator.script)),
           );
           bucket.push(plutusScript);
           const hash = plutusScript.hash(C.ScriptHashNamespace.PlutusV2);
@@ -300,7 +300,7 @@ export class Utils {
   unixTimeToSlot(unixTime: UnixTime): Slot {
     return unixTimeToEnclosingSlot(
       unixTime,
-      SLOT_CONFIG_NETWORK[this.lucid.network]
+      SLOT_CONFIG_NETWORK[this.lucid.network],
     );
   }
 
@@ -327,6 +327,16 @@ export class Utils {
 
   stakeCredentialOf(rewardAddress: RewardAddress): Credential {
     return stakeCredentialOf(rewardAddress);
+  }
+
+  getMinAdaForOutput(output: C.TransactionOutput): bigint {
+    const minAda = C.min_ada_required(
+      output,
+      C.BigNum.from_str(
+        this.lucid.protocolParameters.coinsPerUtxoByte.toString(),
+      ),
+    );
+    return BigInt(minAda.to_str()).valueOf();
   }
 }
 
@@ -575,7 +585,7 @@ export function paymentCredentialOf(address: Address): Credential {
   const { paymentCredential } = getAddressDetails(address);
   if (!paymentCredential) {
     throw new Error(
-      "The specified address does not contain a payment credential."
+      "The specified address does not contain a payment credential.",
     );
   }
   return paymentCredential;
@@ -585,7 +595,7 @@ export function stakeCredentialOf(rewardAddress: RewardAddress): Credential {
   const { stakeCredential } = getAddressDetails(rewardAddress);
   if (!stakeCredential) {
     throw new Error(
-      "The specified address does not contain a stake credential."
+      "The specified address does not contain a stake credential.",
     );
   }
   return stakeCredential;
@@ -644,8 +654,8 @@ export function assetsToValue(assets: Assets): C.Value {
     new Set(
       units
         .filter((unit) => unit !== "lovelace")
-        .map((unit) => unit.slice(0, 56))
-    )
+        .map((unit) => unit.slice(0, 56)),
+    ),
   );
   policies.forEach((policy) => {
     const policyUnits = units.filter((unit) => unit.slice(0, 56) === policy);
@@ -724,7 +734,7 @@ export function toScriptRef(script: Script): C.ScriptRef {
       }
       case "PlutusV1": {
         const plutusScript = C.PlutusScript.from_bytes(
-          fromHex(applyDoubleCborEncoding(script.script))
+          fromHex(applyDoubleCborEncoding(script.script)),
         );
         bucket.push(plutusScript);
         const cScript = C.Script.new_plutus_v1(plutusScript);
@@ -733,7 +743,7 @@ export function toScriptRef(script: Script): C.ScriptRef {
       }
       case "PlutusV2": {
         const plutusScript = C.PlutusScript.from_bytes(
-          fromHex(applyDoubleCborEncoding(script.script))
+          fromHex(applyDoubleCborEncoding(script.script)),
         );
         bucket.push(plutusScript);
         const cScript = C.Script.new_plutus_v2(plutusScript);
@@ -906,7 +916,7 @@ function checksum(num: string): string {
 export function toLabel(num: number): string {
   if (num < 0 || num > 65535) {
     throw new Error(
-      `Label ${num} out of range: min label 1 - max label 65535.`
+      `Label ${num} out of range: min label 1 - max label 65535.`,
     );
   }
   const numHex = num.toString(16).padStart(4, "0");
@@ -929,7 +939,7 @@ export function fromLabel(label: string): number | null {
 export function toUnit(
   policyId: PolicyId,
   name?: string | null,
-  label?: number | null
+  label?: number | null,
 ): Unit {
   const hexLabel = Number.isInteger(label) ? toLabel(label!) : "";
   const n = name ? name : "";
@@ -970,7 +980,7 @@ export function nativeScriptFromJson(nativeScript: NativeScript): Script {
   const cNativeScript = C.encode_json_str_to_native_script(
     JSON.stringify(nativeScript),
     "",
-    C.ScriptSchema.Node
+    C.ScriptSchema.Node,
   );
   const script = toHex(cNativeScript.to_bytes());
   cNativeScript.free();
@@ -984,12 +994,12 @@ export function nativeScriptFromJson(nativeScript: NativeScript): Script {
 export function applyParamsToScript<T extends unknown[] = Data[]>(
   plutusScript: string,
   params: Exact<[...T]>,
-  type?: T
+  type?: T,
 ): string {
   const p = (type ? Data.castTo<T>(params, type) : params) as Data[];
   // cPlutusScript ownership is passed to rust, so don't free
   const cPlutusScript = C.PlutusScript.from_bytes(
-    fromHex(applyDoubleCborEncoding(plutusScript))
+    fromHex(applyDoubleCborEncoding(plutusScript)),
   );
   const cParams = C.PlutusList.from_bytes(fromHex(Data.to<Data[]>(p)));
   const cScript = C.apply_params_to_plutus_script(cParams, cPlutusScript);
@@ -999,17 +1009,25 @@ export function applyParamsToScript<T extends unknown[] = Data[]>(
   return script;
 }
 
-// return toHex(
-//   C.apply_params_to_plutus_script(
-//     C.PlutusList.from_bytes(fromHex(Data.to<Data[]>(p))),
-//     C.PlutusScript.from_bytes(fromHex(applyDoubleCborEncoding(plutusScript)))
-//   ).to_bytes()
+export const chunk = <T>(array: T[], size: number) => {
+  const chunks: T[][] = [];
+  const n = array.length;
+
+  let i = 0;
+
+  while (i < n) {
+    chunks.push(array.slice(i, (i += size)));
+  }
+
+  return chunks;
+};
+
 /** Returns double cbor encoded script. If script is already double cbor encoded it's returned as it is. */
 export function applyDoubleCborEncoding(script: string): string {
   try {
-    const plutusScript = C.PlutusScript.from_bytes(fromHex(script));
-    const doublePlutusScript = C.PlutusScript.new(plutusScript.to_bytes());
-    Freeables.free(plutusScript, doublePlutusScript);
+    C.PlutusScript.from_bytes(
+      C.PlutusScript.from_bytes(fromHex(script)).bytes(),
+    );
     return script;
   } catch (_e) {
     const plutusScript = C.PlutusScript.new(fromHex(script));

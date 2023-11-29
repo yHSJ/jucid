@@ -1,9 +1,10 @@
 import { C } from "../core/mod.ts";
-import { Data } from "../mod.ts";
+import { Data, PROTOCOL_PARAMETERS_DEFAULT } from "../mod.ts";
 import {
   Address,
   Assets,
   CertificateValidator,
+  Configuration,
   Datum,
   Json,
   Label,
@@ -34,10 +35,13 @@ import {
   assetsToValue,
   fromHex,
   toHex,
-  toScriptRef,
   utxoToCore,
+  valueToAssets,
+  chunk,
+  createOutput,
 } from "../utils/mod.ts";
 import { Lucid } from "./lucid.ts";
+import { defaultConfig } from "./tx_config.ts";
 import { TxComplete } from "./tx_complete.ts";
 
 export class Tx {
@@ -45,11 +49,12 @@ export class Tx {
   /** Stores the tx instructions, which get executed after calling .complete() */
   private tasks: ((that: Tx) => unknown)[];
   private lucid: Lucid;
+  configuration = defaultConfig;
 
   constructor(lucid: Lucid) {
     this.lucid = lucid;
     this.txBuilder = C.TransactionBuilder.new(
-      lucid.getTransactionBuilderConfig()
+      lucid.getTransactionBuilderConfig(),
     );
     this.tasks = [];
   }
@@ -79,6 +84,14 @@ export class Tx {
   }
 
   /**
+   * Customize the transaction builder
+   */
+  config(newConfig: Partial<Configuration>) {
+    this.configuration = { ...this.configuration, ...newConfig };
+    return this;
+  }
+
+  /**
    * A public key or native script input.
    * With redeemer it's a plutus script input.
    */
@@ -96,7 +109,7 @@ export class Tx {
           const scriptWitness = redeemer
             ? getScriptWitness(
                 redeemer,
-                utxo.datumHash && utxo.datum ? utxo.datum : undefined
+                utxo.datumHash && utxo.datum ? utxo.datum : undefined,
               )
             : undefined;
 
@@ -125,7 +138,7 @@ export class Tx {
         units.forEach((unit) => {
           if (unit.slice(0, 56) !== policyId) {
             throw new Error(
-              "Only one policy id allowed. You can chain multiple mintAssets functions together if you need to mint assets with different policy ids."
+              "Only one policy id allowed. You can chain multiple mintAssets functions together if you need to mint assets with different policy ids.",
             );
           }
           const assetName = C.AssetName.new(fromHex(unit.slice(56)));
@@ -153,8 +166,12 @@ export class Tx {
       const value = assetsToValue(assets);
 
       const output = C.TransactionOutput.new(addr, value);
-      that.txBuilder.add_output(output);
-      Freeables.free(output, addr, value);
+      const minAda = that.lucid.utils.getMinAdaForOutput(output);
+      assets.lovelace = assets.lovelace > minAda ? assets.lovelace : minAda;
+      const valueWithMinAda = assetsToValue(assets);
+      const outputWithMinAda = C.TransactionOutput.new(addr, valueWithMinAda);
+      that.txBuilder.add_output(outputWithMinAda);
+      Freeables.free(output, addr, value, valueWithMinAda, outputWithMinAda);
     });
     return this;
   }
@@ -163,7 +180,7 @@ export class Tx {
   payToAddressWithData(
     address: Address,
     outputData: Datum | OutputData,
-    assets: Assets
+    assets: Assets,
   ): Tx {
     this.tasks.push((that) => {
       const bucket: FreeableBucket = [];
@@ -174,50 +191,37 @@ export class Tx {
 
         if (
           [outputData.hash, outputData.asHash, outputData.inline].filter(
-            (b) => b
+            (b) => b,
           ).length > 1
         ) {
           throw new Error(
-            "Not allowed to set hash, asHash and inline at the same time."
+            "Not allowed to set hash, asHash and inline at the same time.",
           );
         }
 
-        const addr = addressFromWithNetworkCheck(address, that.lucid);
-        const value = assetsToValue(assets);
-        const output = C.TransactionOutput.new(addr, value);
-        bucket.push(output, addr, value);
+        const output = createOutput({
+          bucket,
+          txBuilder: that.txBuilder,
+          lucid: that.lucid,
+          address,
+          outputData,
+          assets,
+        });
+        const minAda = this.lucid.utils.getMinAdaForOutput(output);
+        const assetsWithMinAda = { ...assets };
+        assetsWithMinAda.lovelace =
+          assets.lovelace > minAda ? assets.lovelace : minAda;
+        const outputWithMinAda = createOutput({
+          bucket,
+          txBuilder: that.txBuilder,
+          lucid: that.lucid,
+          address,
+          outputData,
+          assets: assetsWithMinAda,
+        });
+        bucket.push(output, outputWithMinAda);
 
-        if (outputData.hash) {
-          const dataHash = C.DataHash.from_hex(outputData.hash);
-          const datum = C.Datum.new_data_hash(dataHash);
-          bucket.push(dataHash, datum);
-          output.set_datum(datum);
-        } else if (outputData.asHash) {
-          const plutusData = C.PlutusData.from_bytes(
-            fromHex(outputData.asHash)
-          );
-          const dataHash = C.hash_plutus_data(plutusData);
-          const datum = C.Datum.new_data_hash(dataHash);
-          bucket.push(plutusData, dataHash, datum);
-          output.set_datum(datum);
-          that.txBuilder.add_plutus_data(plutusData);
-        } else if (outputData.inline) {
-          const plutusData = C.PlutusData.from_bytes(
-            fromHex(outputData.inline)
-          );
-          const data = C.Data.new(plutusData);
-          const datum = C.Datum.new_data(data);
-          bucket.push(plutusData, data, datum);
-          output.set_datum(datum);
-        }
-
-        const script = outputData.scriptRef;
-        if (script) {
-          const scriptRef = toScriptRef(script);
-          bucket.push(scriptRef);
-          output.set_script_ref(toScriptRef(script));
-        }
-        that.txBuilder.add_output(output);
+        that.txBuilder.add_output(outputWithMinAda);
       } finally {
         Freeables.free(...bucket);
       }
@@ -229,7 +233,7 @@ export class Tx {
   payToContract(
     address: Address,
     outputData: Datum | OutputData,
-    assets: Assets
+    assets: Assets,
   ): Tx {
     if (typeof outputData === "string") {
       outputData = { asHash: outputData };
@@ -237,7 +241,7 @@ export class Tx {
 
     if (!(outputData.hash || outputData.asHash || outputData.inline)) {
       throw new Error(
-        "No datum set. Script output becomes unspendable without datum."
+        "No datum set. Script output becomes unspendable without datum.",
       );
     }
     return this.payToAddressWithData(address, outputData, assets);
@@ -247,7 +251,7 @@ export class Tx {
   delegateTo(
     rewardAddress: RewardAddress,
     poolId: PoolId,
-    redeemer?: Redeemer
+    redeemer?: Redeemer,
   ): Tx {
     this.tasks.push((that) => {
       const addressDetails = that.lucid.utils.getAddressDetails(rewardAddress);
@@ -257,7 +261,7 @@ export class Tx {
       }
       const credential = getStakeCredential(
         addressDetails.stakeCredential.hash,
-        addressDetails.stakeCredential.type
+        addressDetails.stakeCredential.type,
       );
 
       const keyHash = C.Ed25519KeyHash.from_bech32(poolId);
@@ -281,7 +285,7 @@ export class Tx {
       }
       const credential = getStakeCredential(
         addressDetails.stakeCredential.hash,
-        addressDetails.stakeCredential.type
+        addressDetails.stakeCredential.type,
       );
       const stakeRegistration = C.StakeRegistration.new(credential);
       const certificate =
@@ -303,7 +307,7 @@ export class Tx {
       }
       const credential = getStakeCredential(
         addressDetails.stakeCredential.hash,
-        addressDetails.stakeCredential.type
+        addressDetails.stakeCredential.type,
       );
       const stakeDeregistration = C.StakeDeregistration.new(credential);
       const certificate =
@@ -322,7 +326,7 @@ export class Tx {
     this.tasks.push(async (that) => {
       const poolRegistration = await createPoolRegistration(
         poolParams,
-        that.lucid
+        that.lucid,
       );
 
       const certificate = C.Certificate.new_pool_registration(poolRegistration);
@@ -338,7 +342,7 @@ export class Tx {
     this.tasks.push(async (that) => {
       const poolRegistration = await createPoolRegistration(
         poolParams,
-        that.lucid
+        that.lucid,
       );
 
       // This flag makes sure a pool deposit is not required
@@ -369,7 +373,7 @@ export class Tx {
   withdraw(
     rewardAddress: RewardAddress,
     amount: Lovelace,
-    redeemer?: Redeemer
+    redeemer?: Redeemer,
   ): Tx {
     this.tasks.push((that) => {
       const addr = addressFromWithNetworkCheck(rewardAddress, that.lucid);
@@ -451,7 +455,7 @@ export class Tx {
       that.txBuilder.add_json_metadatum_with_schema(
         labelNum,
         JSON.stringify(metadata),
-        C.MetadataJsonSchema.BasicConversions
+        C.MetadataJsonSchema.BasicConversions,
       );
       Freeables.free(labelNum);
     });
@@ -462,7 +466,7 @@ export class Tx {
   addNetworkId(id: number): Tx {
     this.tasks.push((that) => {
       const networkId = C.NetworkId.from_bytes(
-        fromHex(id.toString(16).padStart(2, "0"))
+        fromHex(id.toString(16).padStart(2, "0")),
       );
       that.txBuilder.set_network_id(networkId);
       Freeables.free(networkId);
@@ -498,6 +502,18 @@ export class Tx {
     return this;
   }
 
+  /** Conditionally apply to the transaction. */
+  applyIf(condition: boolean, callback: (thisTx: Tx) => unknown): Tx {
+    if (condition) this.tasks.push((that) => callback(that));
+    return this;
+  }
+
+  /** Apply to the transaction. */
+  apply(callback: (thisTx: Tx) => unknown): Tx {
+    this.tasks.push((that) => callback(that));
+    return this;
+  }
+
   /** Compose transactions. */
   compose(tx: Tx | null): Tx {
     if (tx) this.tasks = this.tasks.concat(tx.tasks);
@@ -515,6 +531,7 @@ export class Tx {
     nativeUplc?: boolean;
   }): Promise<TxComplete> {
     const bucket: FreeableBucket = [];
+    const { enableChangeSplitting } = this.configuration;
     try {
       if (
         [
@@ -524,7 +541,7 @@ export class Tx {
         ].filter((b) => b).length > 1
       ) {
         throw new Error(
-          "Not allowed to set hash, asHash and inline at the same time."
+          "Not allowed to set hash, asHash and inline at the same time.",
         );
       }
 
@@ -537,10 +554,12 @@ export class Tx {
       // We don't free `utxos` as it is passed as an Option to the txBuilder and the ownership is passed when passing an Option
       const utxos = await this.lucid.wallet.getUtxosCore();
 
+      const collateral = this.lucid.wallet.getCollateralCore();
+
       // We don't free `changeAddress` as it is passed as an Option to the txBuilder and the ownership is passed when passing an Option
       const changeAddress: C.Address = addressFromWithNetworkCheck(
         options?.change?.address || (await this.lucid.wallet.address()),
-        this.lucid
+        this.lucid,
       );
 
       if (options?.coinSelection || options?.coinSelection === undefined) {
@@ -554,23 +573,26 @@ export class Tx {
             800, // weight assets if not plutus
             800, // weight distance if not plutus
             5000, // weight utxos
-          ])
+          ]),
         );
       }
 
       const { datum, plutusData } = getDatumFromOutputData(
-        options?.change?.outputData
+        options?.change?.outputData,
       );
       if (plutusData) {
         this.txBuilder.add_plutus_data(plutusData);
       }
       bucket.push(datum, plutusData);
+      if (enableChangeSplitting) {
+        await this.splitChange();
+      }
       this.txBuilder.balance(changeAddress, datum);
 
       const tx = await this.txBuilder.construct(
-        utxos,
+        collateral || utxos,
         changeAddress,
-        options?.nativeUplc === undefined ? true : options?.nativeUplc
+        options?.nativeUplc === undefined ? true : options?.nativeUplc,
       );
 
       return new TxComplete(this.lucid, tx);
@@ -588,5 +610,155 @@ export class Tx {
     }
 
     return toHex(this.txBuilder.to_bytes());
+  }
+
+  /**
+   * Splits remaining assets into multiple change outputs
+   * if there's enough ADA to cover for minimum UTxO requirements.
+   *
+   * The objective is to create one collateral output as well as
+   * as many pure outputs as possible, since they cost the least to be consumed.
+   *
+   * It does so by following these steps:
+   * 1. Sort the native assets cannonically
+   * 2. Add outputs with a maximum of N native assets until these are exhausted
+   * 3. Continously create pure ADA outputs with half of the remaining amount
+   *    until said remaining amount is below the minimum K
+   *
+   * This is the advanced UTxO management algorithm used by Eternl
+   */
+  private async splitChange() {
+    const bucket: FreeableBucket = [];
+    const { coinsPerUtxoByte } =
+      this.lucid.protocolParameters || PROTOCOL_PARAMETERS_DEFAULT;
+    const { changeNativeAssetChunkSize, changeMinUtxo } = this.configuration;
+
+    const txInputs = this.txBuilder.get_explicit_input();
+    const txOutputs = this.txBuilder.get_explicit_output();
+    bucket.push(txInputs, txOutputs);
+    const change = txInputs.checked_sub(txOutputs);
+
+    let changeAda = change.coin();
+
+    let changeAssets = valueToAssets(change);
+    bucket.push(changeAda);
+    const changeAssetsArray = Object.keys(changeAssets)
+      .filter((v) => v !== "lovelace")
+      // Sort canonically so we group policy IDs together
+      .sort((a, b) => a.localeCompare(b));
+
+    changeAssets = changeAssetsArray.reduce(
+      (res, key) => Object.assign(res, { [key]: changeAssets[key] }),
+      {},
+    );
+
+    const numOutputsWithNativeAssets = Math.ceil(
+      changeAssetsArray.length / changeNativeAssetChunkSize,
+    );
+
+    let longestAddress = C.Address.from_bech32(
+      await this.lucid.wallet.address(),
+    );
+    bucket.push(longestAddress);
+
+    const outputs = this.txBuilder.outputs();
+    bucket.push(outputs);
+    for (let i = 0; i < outputs.len(); i++) {
+      const output = outputs.get(i);
+      bucket.push(output);
+      const outputAddress = output.address();
+      if (
+        !longestAddress ||
+        outputAddress.to_bech32(undefined).length >
+          longestAddress.to_bech32(undefined).length
+      ) {
+        longestAddress = output.address();
+      }
+    }
+
+    const txOutputValue = assetsToValue(changeAssets);
+    const transactionOutput = C.TransactionOutput.new(
+      longestAddress,
+      txOutputValue,
+    );
+    const coinUtxoByte = C.BigNum.from_str(coinsPerUtxoByte.toString());
+    const minAdaPerOutput = C.min_ada_required(transactionOutput, coinUtxoByte);
+    bucket.push(
+      txOutputValue,
+      transactionOutput,
+      coinUtxoByte,
+      minAdaPerOutput,
+    );
+
+    // Do we have enough ADA in the change to split and still
+    // statisfy minADA requirements?
+    const numOutputsWithAssets = C.BigNum.from_str(
+      numOutputsWithNativeAssets.toString(),
+    );
+    const changeAmount = minAdaPerOutput.checked_mul(numOutputsWithAssets);
+    bucket.push(numOutputsWithAssets, changeAmount);
+    const shouldSplitChange = changeAmount.compare(changeAda) < 0;
+
+    const changeMultiAsset = change.multiasset();
+    bucket.push(changeMultiAsset);
+    if (changeMultiAsset && shouldSplitChange) {
+      const assetChunks = chunk(changeAssetsArray, 20);
+
+      const totalChunks = assetChunks.length;
+      for (const [idx, piece] of assetChunks.entries()) {
+        const isLastChunk = idx === totalChunks - 1;
+        if (isLastChunk) {
+          continue;
+        }
+        const val = assetsToValue(
+          piece.reduce(
+            (res, key) => Object.assign(res, { [key]: changeAssets[key] }),
+            {},
+          ),
+        );
+        bucket.push(val);
+        const changeAddress = C.Address.from_bech32(
+          await this.lucid.wallet.address(),
+        );
+        const minAdaTxOutput = C.TransactionOutput.new(changeAddress, val);
+
+        const coinUtxoByte = C.BigNum.from_str(coinsPerUtxoByte.toString());
+        const minAda = C.min_ada_required(minAdaTxOutput, coinUtxoByte);
+
+        val.set_coin(minAda);
+        changeAda = changeAda.checked_sub(minAda);
+        const txOutputWithMinAda = C.TransactionOutput.new(changeAddress, val);
+        bucket.push(changeAda, minAdaTxOutput);
+        this.txBuilder.add_output(txOutputWithMinAda);
+      }
+    }
+
+    const two = C.BigNum.from_str("2");
+    const changeMinUtxoBigNum = C.BigNum.from_str(changeMinUtxo);
+    let split = changeAda.checked_div(two);
+    bucket.push(two, changeMinUtxoBigNum, split);
+    while (
+      // If the half is more than the minimum, we can split it
+      split.compare(changeMinUtxoBigNum) >= 0
+    ) {
+      const half = changeAda.checked_div(two);
+      changeAda = changeAda.checked_sub(half);
+      split = changeAda.checked_div(two);
+
+      const changeAddress = C.Address.from_bech32(
+        await this.lucid.wallet.address(),
+      );
+      const halfValue = C.Value.new(half);
+      const changeOutput = C.TransactionOutput.new(changeAddress, halfValue);
+      bucket.push(
+        half,
+        changeAda,
+        split,
+        changeAddress,
+        halfValue,
+        changeOutput,
+      );
+      this.txBuilder.add_output(changeOutput);
+    }
   }
 }

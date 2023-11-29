@@ -1,5 +1,7 @@
+import { TransactionBuilder } from "../core/libs/cardano_multiplatform_lib/nodejs/cardano_multiplatform_lib.generated.js";
 import {
   Address,
+  Assets,
   C,
   CertificateValidator,
   Datum,
@@ -13,14 +15,16 @@ import {
   Tx,
   WithdrawalValidator,
   applyDoubleCborEncoding,
+  assetsToValue,
   fromHex,
   networkToId,
+  toScriptRef,
 } from "../mod.ts";
 import { FreeableBucket, Freeables } from "./freeable.ts";
 
 export function getScriptWitness(
   redeemer: Redeemer,
-  datum?: Datum
+  datum?: Datum,
 ): C.ScriptWitness {
   const bucket: FreeableBucket = [];
   try {
@@ -31,7 +35,7 @@ export function getScriptWitness(
     const plutusWitness = C.PlutusWitness.new(
       plutusRedeemer,
       plutusData,
-      undefined
+      undefined,
     );
     // We shouldn't free plutusData as it is an Option
     bucket.push(plutusRedeemer, plutusWitness);
@@ -56,7 +60,7 @@ export function getStakeCredential(hash: string, type: "Key" | "Script") {
 
 export async function createPoolRegistration(
   poolParams: PoolParams,
-  lucid: Lucid
+  lucid: Lucid,
 ): Promise<C.PoolRegistration> {
   const bucket: FreeableBucket = [];
   try {
@@ -77,7 +81,7 @@ export async function createPoolRegistration(
 
     const metadataHash = metadata
       ? C.PoolMetadataHash.from_bytes(
-          C.hash_blake2b256(new Uint8Array(metadata))
+          C.hash_blake2b256(new Uint8Array(metadata)),
         )
       : null;
 
@@ -88,7 +92,7 @@ export async function createPoolRegistration(
         case "SingleHostIp": {
           const ipV4 = relay.ipV4
             ? C.Ipv4.new(
-                new Uint8Array(relay.ipV4.split(".").map((b) => parseInt(b)))
+                new Uint8Array(relay.ipV4.split(".").map((b) => parseInt(b))),
               )
             : undefined;
           const ipV6 = relay.ipV6
@@ -141,7 +145,7 @@ export async function createPoolRegistration(
       addr,
       rewardAddress,
       url,
-      poolMetadata
+      poolMetadata,
     );
 
     const params = C.PoolParams.new(
@@ -153,7 +157,7 @@ export async function createPoolRegistration(
       rewardAddress!,
       poolOwners,
       relays,
-      poolMetadata
+      poolMetadata,
     );
 
     const poolRegistration = C.PoolRegistration.new(params);
@@ -172,7 +176,7 @@ export function attachScript(
     | SpendingValidator
     | MintingPolicy
     | CertificateValidator
-    | WithdrawalValidator
+    | WithdrawalValidator,
 ) {
   if (type === "Native") {
     const nativeScript = C.NativeScript.from_bytes(fromHex(script));
@@ -181,14 +185,14 @@ export function attachScript(
     return;
   } else if (type === "PlutusV1") {
     const plutusScript = C.PlutusScript.from_bytes(
-      fromHex(applyDoubleCborEncoding(script))
+      fromHex(applyDoubleCborEncoding(script)),
     );
     tx.txBuilder.add_plutus_script(plutusScript);
     Freeables.free(plutusScript);
     return;
   } else if (type === "PlutusV2") {
     const plutusScript = C.PlutusScript.from_bytes(
-      fromHex(applyDoubleCborEncoding(script))
+      fromHex(applyDoubleCborEncoding(script)),
     );
     tx.txBuilder.add_plutus_v2_script(plutusScript);
     Freeables.free(plutusScript);
@@ -199,14 +203,14 @@ export function attachScript(
 
 export function addressFromWithNetworkCheck(
   address: Address | RewardAddress,
-  lucid: Lucid
+  lucid: Lucid,
 ): C.Address {
   const { type, networkId } = lucid.utils.getAddressDetails(address);
 
   const actualNetworkId = networkToId(lucid.network);
   if (networkId !== actualNetworkId) {
     throw new Error(
-      `Invalid address: Expected address with network id ${actualNetworkId}, but got ${networkId}`
+      `Invalid address: Expected address with network id ${actualNetworkId}, but got ${networkId}`,
     );
   }
   if (type === "Byron") {
@@ -242,4 +246,53 @@ export function getDatumFromOutputData(outputData?: OutputData): {
   } else {
     return {};
   }
+}
+
+export function createOutput({
+  bucket,
+  address,
+  assets,
+  outputData,
+  lucid,
+  txBuilder,
+}: {
+  bucket: FreeableBucket;
+  address: Address;
+  assets: Assets;
+  outputData: OutputData;
+  lucid: Lucid;
+  txBuilder: TransactionBuilder;
+}) {
+  const addr = addressFromWithNetworkCheck(address, lucid);
+  const value = assetsToValue(assets);
+  const output = C.TransactionOutput.new(addr, value);
+  bucket.push(output, addr, value);
+
+  if (outputData.hash) {
+    const dataHash = C.DataHash.from_hex(outputData.hash);
+    const datum = C.Datum.new_data_hash(dataHash);
+    bucket.push(dataHash, datum);
+    output.set_datum(datum);
+  } else if (outputData.asHash) {
+    const plutusData = C.PlutusData.from_bytes(fromHex(outputData.asHash));
+    const dataHash = C.hash_plutus_data(plutusData);
+    const datum = C.Datum.new_data_hash(dataHash);
+    bucket.push(plutusData, dataHash, datum);
+    output.set_datum(datum);
+    txBuilder.add_plutus_data(plutusData);
+  } else if (outputData.inline) {
+    const plutusData = C.PlutusData.from_bytes(fromHex(outputData.inline));
+    const data = C.Data.new(plutusData);
+    const datum = C.Datum.new_data(data);
+    bucket.push(plutusData, data, datum);
+    output.set_datum(datum);
+  }
+
+  const script = outputData.scriptRef;
+  if (script) {
+    const scriptRef = toScriptRef(script);
+    bucket.push(scriptRef);
+    output.set_script_ref(toScriptRef(script));
+  }
+  return output;
 }
