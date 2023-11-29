@@ -3,3 +3,5 @@
 node_modules
 deno.lock
 test.ts
+dist
+
